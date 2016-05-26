@@ -1,0 +1,58 @@
+#!/usr/bin/gosh
+;; -*- scheme-mode -*-
+(use gauche.process)
+(use srfi-13)
+(use file.util)
+
+(define TMPDIR "/tmp/merge-to-pdf-temp~a")
+
+(define %read-from-port
+  (lambda (p)
+    (let f ((x (read-line p)))
+      (if (eof-object? x) '() (cons x (f (read-line p)))))))
+
+(define process->list
+  (lambda (cmd)
+    (call-with-input-process
+     cmd
+     (lambda (p) (%read-from-port p))
+     :error :ignore )))
+
+(define process->string (lambda (c) (string-join (process->list c) "\n")))
+
+(define (sanitize-path key)  
+  ;; taken from fsdbm.scm (Shiro Kawai)
+  (with-string-io key
+    (lambda ()
+      (write-char #\_) ;; always emit one char, so we can deal with null key                
+      (let loop ((c (read-byte))
+                 (count 0))
+	(cond [(eof-object? c)]
+              [(>= count 255)
+               (write-char #\/) (loop c 0)]
+              [(and (< c 127)
+                    (char-set-contains? #[0-9a-zA-Z] (integer->char c)))
+	              (write-byte c) (loop (read-byte) (+ count 1))]
+              [else
+               (format #t "~2,'0X" c)
+               (loop (read-byte) (+ count 1))])))))
+
+
+(define main
+  (lambda (args)
+    (let ((files (string-split (process->string '(zenity |--title=Select Files| --file-selection --multiple)) #\|))
+	  (tmpf (format #f TMPDIR (sys-getpid))))
+      (unless (file-exists? tmpf)
+	      (make-directory* tmpf))
+      (for-each
+       (lambda (f)
+	 (copy-file f (string-append tmpf "/" (sanitize-path f) )))
+       files)
+;;      (let ((destination (process->string '(zenity |--title=Save as...| --file-selection))))
+;;	(run-process `(convert ,(string-append tmpf "/*") ,destination) :wait #t)
+;;	(run-process `(evince ,destination)))
+      (let ((destination (string-append tmpf "/output.pdf")))
+	(run-process `(convert ,(string-append tmpf "/*") ,destination) :wait #t)
+	(run-process `(masterpdfeditor3 ,destination)))
+      )))
+
